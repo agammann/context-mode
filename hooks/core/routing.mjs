@@ -741,16 +741,38 @@ export function routePreToolUse(toolName, toolInput, projectDir, platform, sessi
         const isCurl = /\bcurl\b/i.test(s);
         const isWget = /\bwget\b/i.test(s);
 
-        // Check for file output flags
-        const hasFileOutput = isCurl
-          ? /\s(-o|--output)\s/.test(s) || /\s*>\s*/.test(s) || /\s*>>\s*/.test(s)
-          : /\s(-O|--output-document)\s/.test(s) || /\s*>\s*/.test(s) || /\s*>>\s*/.test(s);
+        // Quoted content is masked above. Accept equals-form output only when
+        // every target is a literal file path, not a shell expansion or device.
+        const equalsTargets = [...s.matchAll(isCurl
+          ? /\s(?:-o|--output)=([^\s]*)/g
+          : /\s(?:-O|--output-document)=([^\s]*)/g
+        )].map(match => match[1]);
+        const safeEqualsTargets = equalsTargets.every(target =>
+          /^[A-Za-z0-9_./:-]+$/.test(target) &&
+          target !== "-" &&
+          !/^\/(?:dev|proc)\//i.test(target) &&
+          !/(?:^|\/)(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.[^/]*)?$/i.test(target)
+        );
+        // One output target covers only one transfer. Keep equals-form routing
+        // to a single URL and known quiet/location flags; other curl options
+        // (including --next, --write-out, and config files) can emit to stdout.
+        if (equalsTargets.length > 0) {
+          const singleFileDownload = isCurl
+            ? /^curl(?:\s+(?:-[sSL]+|--silent|--location))*\s+--output=[A-Za-z0-9_./:-]+(?:\s+(?:-[sSL]+|--silent|--location))*\s+(?:https?|file):\/\/[A-Za-z0-9._~:/?@%+=,#-]+$/i.test(s)
+            : /^wget(?:\s+(?:-q|--quiet))*\s+--output-document=[A-Za-z0-9_./:-]+(?:\s+(?:-q|--quiet))*\s+(?:https?|file):\/\/[A-Za-z0-9._~:/?@%+=,#-]+$/i.test(s);
+          if (!safeEqualsTargets || !singleFileDownload) return true;
+        }
+        const hasFileOutput = safeEqualsTargets && (
+          (isCurl ? /\s(-o|--output)\s/.test(s) : /\s(-O|--output-document)\s/.test(s)) ||
+          equalsTargets.length > 0 ||
+          /\s*>\s*/.test(s)
+        );
 
         if (!hasFileOutput) return true; // no file output → dangerous
 
-        // Stdout aliases: -o -, -o /dev/stdout, -O -
-        if (isCurl && /\s(-o|--output)\s+(-|\/dev\/stdout)(\s|$)/.test(s)) return true;
-        if (isWget && /\s(-O|--output-document)\s+(-|\/dev\/stdout)(\s|$)/.test(s)) return true;
+        // Stdout/stderr aliases bypass file output, including /dev/fd links.
+        if (isCurl && /\s(-o|--output)(?:\s+|=)(?:-|\/dev\/(?:stdout|stderr|fd\/[12])|\/proc\/self\/fd\/[12])(?=\s|$)/.test(s)) return true;
+        if (isWget && /\s(-O|--output-document)(?:\s+|=)(?:-|\/dev\/(?:stdout|stderr|fd\/[12])|\/proc\/self\/fd\/[12])(?=\s|$)/.test(s)) return true;
 
         // Verbose/trace flags flood stderr → context
         if (/\s(-v|--verbose|--trace|-D\s+-)\b/.test(s)) return true;

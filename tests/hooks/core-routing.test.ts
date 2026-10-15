@@ -153,9 +153,30 @@ describe("routePreToolUse", () => {
       expect(result).toBeNull();
     });
 
+    it("allows curl -s --output=file", () => {
+      const result = routePreToolUse("Bash", {
+        command: "curl -s --output=/tmp/data.json https://example.com/data.json",
+      });
+      expect(result).toBeNull();
+    });
+
+    it("allows curl -sL --output=file for one URL", () => {
+      const result = routePreToolUse("Bash", {
+        command: "curl -sL --output=data.json https://example.com/data.json",
+      });
+      expect(result).toBeNull();
+    });
+
     it("allows wget -q -O file (quiet + file output)", () => {
       const result = routePreToolUse("Bash", {
         command: "wget -q -O /tmp/terraform.zip https://releases.hashicorp.com/terraform/1.0.0/terraform_1.0.0_linux_amd64.zip",
+      });
+      expect(result).toBeNull();
+    });
+
+    it("allows wget -q --output-document=file", () => {
+      const result = routePreToolUse("Bash", {
+        command: "wget -q --output-document=/tmp/data.json https://example.com/data.json",
       });
       expect(result).toBeNull();
     });
@@ -171,6 +192,54 @@ describe("routePreToolUse", () => {
       const result = routePreToolUse("Bash", {
         command: "curl -s -o - https://example.com",
       });
+      expect(result).not.toBeNull();
+      expect(result!.action).toBe("modify");
+    });
+
+    it("blocks curl --output=- (stdout alias)", () => {
+      const result = routePreToolUse("Bash", {
+        command: "curl -s --output=- https://example.com",
+      });
+      expect(result).not.toBeNull();
+      expect(result!.action).toBe("modify");
+    });
+
+    it("blocks wget --output-document=- (stdout alias)", () => {
+      const result = routePreToolUse("Bash", {
+        command: "wget -q --output-document=- https://example.com",
+      });
+      expect(result).not.toBeNull();
+      expect(result!.action).toBe("modify");
+    });
+
+    it.each([
+      "curl -s --output=\"-\" https://example.com",
+      "curl -s --output='/dev/stdout' https://example.com",
+      "curl -s --output=/dev/fd/1 https://example.com",
+      "wget -q --output-document=\"-\" https://example.com",
+      "wget -q --output-document=/dev/fd/1 https://example.com",
+      "curl -s --output=-'' https://example.com",
+      'wget -q --output-document=/dev/stdout"" https://example.com',
+      "curl -s --output=\\- https://example.com",
+      "wget -q --output-document=$OUT https://example.com",
+      "curl -s --output=/dev/${STREAM} https://example.com",
+      "curl -s --output=CON https://example.com",
+      "curl -s --output=C:/CON https://example.com",
+      "wget -q --output-document=C:/CON.txt https://example.com",
+    ])("blocks output streams in %s", (command) => {
+      const result = routePreToolUse("Bash", { command });
+      expect(result).not.toBeNull();
+      expect(result!.action).toBe("modify");
+    });
+
+    it.each([
+      "curl -s --output=data.json https://example.com/one https://example.com/two",
+      "curl -s --output=data.json https://example.com/one --next https://example.com/two",
+      "curl -s --output=data.json --write-out=%{json} https://example.com/one",
+      "curl -s --output=data.json --dump-header=- https://example.com/one",
+      "curl -s --output=data.json --config=options.txt https://example.com/one",
+    ])("blocks equals-form curl with additional output paths in %s", (command) => {
+      const result = routePreToolUse("Bash", { command });
       expect(result).not.toBeNull();
       expect(result!.action).toBe("modify");
     });
